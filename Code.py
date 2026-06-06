@@ -1,9 +1,13 @@
 import numpy as np
 import time
+import csv
 import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
 
 
-def fatoracao_lu(A):
+def FatoracaoLU(A):
+    # Decompoe a matriz quadrada em L e U. O for varre as colunas fazendo a eliminacao de Gauss, 
+    # e os multiplicadores vao pra matriz L. O pivotamento parcial garante a estabilidade numerica.
     A = np.array(A, dtype=float)
     n = A.shape[0]
     if A.shape[1] != n:
@@ -11,69 +15,72 @@ def fatoracao_lu(A):
 
     L = np.eye(n)
     U = A.copy()
+    Perm = list(range(n))
 
-    # Eliminacao: U recebe as eliminacoes e L guarda os multiplicadores
     for k in range(n - 1):
-        if U[k, k] == 0:
-            # Pivotamento parcial simples
-            p = None
-            for i in range(k + 1, n):
-                if U[i, k] != 0:
-                    p = i
-                    break
-            if p is None:
-                raise ValueError("Matriz singular.")
+        PivoMax = abs(U[k, k])
+        p = k
+        for i in range(k + 1, n):
+            if abs(U[i, k]) > PivoMax:
+                PivoMax = abs(U[i, k])
+                p = i
+
+        if PivoMax == 0.0:
+            raise ValueError("Matriz singular.")
+
+        # Faz um novo pivotamento se achar um pivo maior na coluna
+        if p != k:
             U[[k, p], :] = U[[p, k], :]
             if k > 0:
                 L[[k, p], :k] = L[[p, k], :k]
+            Perm[k], Perm[p] = Perm[p], Perm[k]
 
-        for i in range(k + 1, n):
-            L[i, k] = U[i, k] / U[k, k]
-            U[i, k:] = U[i, k:] - L[i, k] * U[k, k:]
-            U[i, k] = 0.0
+        L[k + 1:, k] = U[k + 1:, k] / U[k, k]
+        U[k + 1:, k:] = U[k + 1:, k:] - np.outer(L[k + 1:, k], U[k, k:])
 
-    return L, U
+    return L, U, Perm
 
 
-def resolve_lu(L, U, b):
+def ResolveLU(L, U, b, Perm=None):
+    # Resolve o sistema linear em duas fases: substituicao progressiva em L e retroativa em U.
+    # O vetor Perm aplica as trocas de linha durante o pivotamento.
     b = np.array(b, dtype=float)
     n = L.shape[0]
     if L.shape != (n, n) or U.shape != (n, n) or b.shape[0] != n:
         raise ValueError("Dimensoes incompativeis.")
 
-    # Substituicao Ly = b
+    if Perm is not None:
+        b = b[Perm]
+
     y = np.zeros(n)
     for i in range(n):
         y[i] = b[i] - np.dot(L[i, :i], y[:i])
-
-    # Substituicao Ux = y
     x = np.zeros(n)
     for i in range(n - 1, -1, -1):
         if U[i, i] == 0:
             raise ValueError("Matriz singular.")
         x[i] = (y[i] - np.dot(U[i, i + 1:], x[i + 1:])) / U[i, i]
-
     return x
 
 
-def k_cond(T: float) -> float:
+def Kcond(T: float) -> float:
     return float(np.exp(T))
 
 
-def fonte_f(x: float, y: float) -> float:
-    s_x = np.sin(np.pi * x)
-    s_y = np.sin(np.pi * y)
-    c_x = np.cos(np.pi * x)
-    c_y = np.cos(np.pi * y)
-    T = s_x * s_y
-    return float(-np.exp(T) * (np.pi**2) * (c_x**2 * s_y**2 + s_x**2 * c_y**2))
+def FonteF(x: float, y: float) -> float:
+    Sx = np.sin(np.pi * x)
+    Sy = np.sin(np.pi * y)
+    Cx = np.cos(np.pi * x)
+    Cy = np.cos(np.pi * y)
+    T = Sx * Sy
+    return float(np.exp(T) * (np.pi**2) * (Cx**2 * Sy**2 + Sx**2 * Cy**2 - 2 * Sx * Sy))
 
 
-def calcular_F(U: np.ndarray, N: int) -> np.ndarray:
+def CalcularF(U: np.ndarray, N: int) -> np.ndarray:
+    # Calcula o vetor de residuos F(U) aproximando as derivadas por diferencas finitas centradas.
+    # As condutividades Kcond sao calculadas nos pontos medios dos nos da malha para segurar a ordem de precisao.
     U = np.array(U, dtype=float).reshape((N, N))
     h = 1.0 / (N + 1)
-
-    # Conversao vetor para matriz
     T = np.zeros((N + 2, N + 2))
     T[1: N + 1, 1: N + 1] = U
 
@@ -83,104 +90,104 @@ def calcular_F(U: np.ndarray, N: int) -> np.ndarray:
         x = i * h
         for j in range(1, N + 1):
             y = j * h
+            Tij = T[i, j]
+            Tip = T[i + 1, j]
+            Tim = T[i - 1, j]
+            Tjp = T[i, j + 1]
+            Tjm = T[i, j - 1]
 
-            T_ij = T[i, j]
-            T_ip = T[i + 1, j]
-            T_im = T[i - 1, j]
-            T_jp = T[i, j + 1]
-            T_jm = T[i, j - 1]
+            Kij = Kcond(Tij)
+            Kip = Kcond(Tip)
+            Kim = Kcond(Tim)
+            Kjp = Kcond(Tjp)
+            Kjm = Kcond(Tjm)
 
-            k_ij = k_cond(T_ij)
-            k_ip = k_cond(T_ip)
-            k_im = k_cond(T_im)
-            k_jp = k_cond(T_jp)
-            k_jm = k_cond(T_jm)
+            Kip12 = 0.5 * (Kip + Kij)
+            Kim12 = 0.5 * (Kim + Kij)
+            Kjp12 = 0.5 * (Kjp + Kij)
+            Kjm12 = 0.5 * (Kjm + Kij)
 
-            k_ip12 = 0.5 * (k_ip + k_ij)
-            k_im12 = 0.5 * (k_im + k_ij)
-            k_jp12 = 0.5 * (k_jp + k_ij)
-            k_jm12 = 0.5 * (k_jm + k_ij)
-
-            termo = (
-                k_ip12 * (T_ip - T_ij)
-                - k_im12 * (T_ij - T_im)
-                + k_jp12 * (T_jp - T_ij)
-                - k_jm12 * (T_ij - T_jm)
+            Termo = (
+                Kip12 * (Tip - Tij)
+                - Kim12 * (Tij - Tim)
+                + Kjp12 * (Tjp - Tij)
+                - Kjm12 * (Tij - Tjm)
             )
 
-            F[i - 1, j - 1] = (termo / (h**2)) - fonte_f(x, y)
+            F[i - 1, j - 1] = (Termo / (h**2)) - FonteF(x, y)
 
     return F.reshape(N * N)
 
 
-def calcular_jacobiana(U: np.ndarray, N: int) -> np.ndarray:
+def CalcularJacobiana(U: np.ndarray, N: int) -> np.ndarray:
+    # Monta a matriz Jacobiana avaliando as derivadas de F em relacao as temperaturas.
+    # Por ser um problema 2D, so os vizinhos adjacentes entram no preenchimento (matriz esparsa de 5 diagonais).
+    # Como o problema e nao linear, a regra da cadeia entra no calculo dos termos de derivada.
     U = np.array(U, dtype=float).reshape((N, N))
     h = 1.0 / (N + 1)
 
-    # Conversao vetor para matriz
     T = np.zeros((N + 2, N + 2))
     T[1: N + 1, 1: N + 1] = U
 
     J = np.zeros((N * N, N * N))
-    inv_h2 = 1.0 / (h * h)
+    InvH2 = 1.0 / (h * h)
 
     for i in range(1, N + 1):
         for j in range(1, N + 1):
-            T_ij = T[i, j]
-            T_ip = T[i + 1, j]
-            T_im = T[i - 1, j]
-            T_jp = T[i, j + 1]
-            T_jm = T[i, j - 1]
+            Tij = T[i, j]
+            Tip = T[i + 1, j]
+            Tim = T[i - 1, j]
+            Tjp = T[i, j + 1]
+            Tjm = T[i, j - 1]
 
-            k_ij = k_cond(T_ij)
-            k_ip = k_cond(T_ip)
-            k_im = k_cond(T_im)
-            k_jp = k_cond(T_jp)
-            k_jm = k_cond(T_jm)
+            Kij = Kcond(Tij)
+            Kip = Kcond(Tip)
+            Kim = Kcond(Tim)
+            Kjp = Kcond(Tjp)
+            Kjm = Kcond(Tjm)
 
-            k_ip12 = 0.5 * (k_ip + k_ij)
-            k_im12 = 0.5 * (k_im + k_ij)
-            k_jp12 = 0.5 * (k_jp + k_ij)
-            k_jm12 = 0.5 * (k_jm + k_ij)
+            Kip12 = 0.5 * (Kip + Kij)
+            Kim12 = 0.5 * (Kim + Kij)
+            Kjp12 = 0.5 * (Kjp + Kij)
+            Kjm12 = 0.5 * (Kjm + Kij)
 
-            d_ij = (
-                0.5 * k_ij * (T_ip - T_ij) - k_ip12
-                - 0.5 * k_ij * (T_ij - T_im) - k_im12
-                + 0.5 * k_ij * (T_jp - T_ij) - k_jp12
-                - 0.5 * k_ij * (T_ij - T_jm) - k_jm12
+            Dij = (
+                0.5 * Kij * (Tip - Tij) - Kip12
+                - 0.5 * Kij * (Tij - Tim) - Kim12
+                + 0.5 * Kij * (Tjp - Tij) - Kjp12
+                - 0.5 * Kij * (Tij - Tjm) - Kjm12
             )
-            d_ip = 0.5 * k_ip * (T_ip - T_ij) + k_ip12
-            d_im = -0.5 * k_im * (T_ij - T_im) + k_im12
-            d_jp = 0.5 * k_jp * (T_jp - T_ij) + k_jp12
-            d_jm = -0.5 * k_jm * (T_ij - T_jm) + k_jm12
+            Dip = 0.5 * Kip * (Tip - Tij) + Kip12
+            Dim = -0.5 * Kim * (Tij - Tim) + Kim12
+            Djp = 0.5 * Kjp * (Tjp - Tij) + Kjp12
+            Djm = -0.5 * Kjm * (Tij - Tjm) + Kjm12
 
-            # Mapeamento (i,j) -> k_row no vetor 1D
-            k_row = (i - 1) * N + (j - 1)
-            J[k_row, k_row] = d_ij * inv_h2
+            # Faz a passagem dos indices 2D da malha pra estrutura 1D da matriz
+            LinhaK = (i - 1) * N + (j - 1)
+            J[LinhaK, LinhaK] = Dij * InvH2
 
-            # Verifica se o vizinho e interno antes de preencher a coluna
             if i + 1 <= N:
-                k_col = i * N + (j - 1)
-                J[k_row, k_col] = d_ip * inv_h2
+                ColunaK = i * N + (j - 1)
+                J[LinhaK, ColunaK] = Dip * InvH2
             if i - 1 >= 1:
-                k_col = (i - 2) * N + (j - 1)
-                J[k_row, k_col] = d_im * inv_h2
+                ColunaK = (i - 2) * N + (j - 1)
+                J[LinhaK, ColunaK] = Dim * InvH2
             if j + 1 <= N:
-                k_col = (i - 1) * N + j
-                J[k_row, k_col] = d_jp * inv_h2
+                ColunaK = (i - 1) * N + j
+                J[LinhaK, ColunaK] = Djp * InvH2
             if j - 1 >= 1:
-                k_col = (i - 1) * N + (j - 2)
-                J[k_row, k_col] = d_jm * inv_h2
+                ColunaK = (i - 1) * N + (j - 2)
+                J[LinhaK, ColunaK] = Djm * InvH2
 
     return J
 
 
-def norma_inf(v: np.ndarray) -> float:
+def NormaInfinito(v: np.ndarray) -> float:
     v = np.array(v, dtype=float)
     return float(np.max(np.abs(v)))
 
 
-def _inferir_n(U: np.ndarray) -> int:
+def InferirN(U: np.ndarray) -> int:
     m = int(U.size)
     n = int(np.sqrt(m))
     if n * n != m:
@@ -188,133 +195,154 @@ def _inferir_n(U: np.ndarray) -> int:
     return n
 
 
-def gradiente_conjugado_manual(
-    A: np.ndarray, b: np.ndarray, tol: float, max_iter_cg: int
+def BiCGSTAB(
+    A: np.ndarray, b: np.ndarray, Tol: float, MaxIterBCG: int
 ) -> tuple[np.ndarray, int]:
+    # Metodo iterativo de Krylov (Gradiente Biconjugado Estabilizado) pra sistemas assimetricos.
+    # O laco atualiza os vetores de direcao p e de residuo r pra tentar minimizar o erro ate a tolerancia limite.
+    # É otimo porque a gente nao precisa da matriz na memoria toda estruturada, economizando muito espaco.
     x = np.zeros_like(b, dtype=float)
     r = b - np.dot(A, x)
-    p = r.copy()
-    rs_old = float(np.dot(r, r))
-    best_x = x.copy()
-    best_res = np.sqrt(rs_old)
-    prev_res = best_res
-    warned = False
+    R0 = r.copy()
+    Rho = 1.0
+    Alfa = 1.0
+    Omega = 1.0
+    v = np.zeros_like(b)
+    p = np.zeros_like(b)
 
-    if best_res < tol:
-        return x, 0
+    NormaB = np.sqrt(float(np.dot(b, b)))
+    if NormaB == 0.0:
+        NormaB = 1.0
 
-    for k in range(max_iter_cg):
-        Ap = np.dot(A, p)
-        denom = float(np.dot(p, Ap))
-        if denom == 0.0:
+    for k in range(MaxIterBCG):
+        RhoNovo = float(np.dot(R0, r))
+        if abs(RhoNovo) < 1e-40:
             break
-        alpha = rs_old / denom
-        x = x + alpha * p
-        r = r - alpha * Ap
 
-        rs_new = float(np.dot(r, r))
-        res_norm = np.sqrt(rs_new)
+        Beta = (RhoNovo / Rho) * (Alfa / Omega)
+        p = r + Beta * (p - Omega * v)
 
-        if res_norm < best_res:
-            best_res = res_norm
-            best_x = x.copy()
+        v = np.dot(A, p)
+        Denom = float(np.dot(R0, v))
+        if abs(Denom) < 1e-40:
+            break
+        Alfa = RhoNovo / Denom
 
-        if res_norm > prev_res and not warned:
-            print("Aviso: residuo do CG aumentou; retornando melhor aproximacao.")
-            warned = True
-
-        if res_norm < tol:
+        s = r - Alfa * v
+        NormaS = np.sqrt(float(np.dot(s, s)))
+        if NormaS / NormaB < Tol:
+            x = x + Alfa * p
             return x, k + 1
 
-        beta = rs_new / rs_old
-        p = r + beta * p
-        rs_old = rs_new
-        prev_res = res_norm
+        t = np.dot(A, s)
+        DenomOmega = float(np.dot(t, t))
+        if abs(DenomOmega) < 1e-40:
+            x = x + Alfa * p
+            return x, k + 1
+        Omega = float(np.dot(t, s)) / DenomOmega
 
-    return best_x, max_iter_cg
+        x = x + Alfa * p + Omega * s
+        r = s - Omega * t
+
+        NormaR = np.sqrt(float(np.dot(r, r)))
+        if NormaR / NormaB < Tol:
+            return x, k + 1
+
+        if abs(Omega) < 1e-40:
+            break
+
+        Rho = RhoNovo
+
+    return x, MaxIterBCG
 
 
-def newton_lu(U0: np.ndarray, tol: float, max_iter: int) -> tuple[np.ndarray, int]:
+def NewtonLU(U0: np.ndarray, Tol: float, MaxIter: int) -> tuple[np.ndarray, int, list]:
+    # O Newton-Raphson tradicional avaliando a Jacobiana completa no laco iterativo.
+    # Resolve J * DeltaU = -F  pela fatoracao LU. Otima convergencia se o chute for bom, 
+    # porem recriar a Jacobiana e fatorar do zero em cada volta e bem pesado.
     U = np.array(U0, dtype=float).copy()
-    N = _inferir_n(U)
+    N = InferirN(U)
+    HistoricoRes = []
 
-    for k in range(max_iter):
-        F = calcular_F(U, N)
-        if norma_inf(F) < tol:
-            return U, k
+    for k in range(MaxIter):
+        F = CalcularF(U, N)
+        ResNorma = NormaInfinito(F)
+        HistoricoRes.append(ResNorma)
+        if ResNorma < Tol:
+            return U, k, HistoricoRes
 
-        J = calcular_jacobiana(U, N)
-        L, U_lu = fatoracao_lu(J)
+        J = CalcularJacobiana(U, N)
+        L, ULU, Perm = FatoracaoLU(J)
 
-        # resolve J(U) dU = -F(U)
-        dU = resolve_lu(L, U_lu, -F)
-        U = U + dU
+        DeltaU = ResolveLU(L, ULU, -F, Perm)
+        U = U + DeltaU
 
-    return U, max_iter
+    return U, MaxIter, HistoricoRes
 
 
-def newton_cg(U0: np.ndarray, tol: float, max_iter: int) -> tuple[np.ndarray, int]:
+def NewtonBCG(U0: np.ndarray, Tol: float, MaxIter: int) -> tuple[np.ndarray, int, list]:
+    # O laco continua montando J, mas acha DeltaU de maneira aproximada e iterativa.
     U = np.array(U0, dtype=float).copy()
-    N = _inferir_n(U)
-    max_iter_cg = max(20, U.size)
+    N = InferirN(U)
+    MaxIterBCG = max(50, 2 * U.size)
+    HistoricoRes = []
 
-    for k in range(max_iter):
-        F = calcular_F(U, N)
-        if norma_inf(F) < tol:
-            return U, k
+    for k in range(MaxIter):
+        F = CalcularF(U, N)
+        ResNorma = NormaInfinito(F)
+        HistoricoRes.append(ResNorma)
+        if ResNorma < Tol:
+            return U, k, HistoricoRes
 
-        J = calcular_jacobiana(U, N)
+        J = CalcularJacobiana(U, N)
 
-        # Passo de Newton J(U) dU = -F(U)
-        dU, _ = gradiente_conjugado_manual(J, -F, tol, max_iter_cg)
-        U = U + dU
+        DeltaU, _ = BiCGSTAB(J, -F, Tol * 0.1, MaxIterBCG)
+        U = U + DeltaU
 
-    return U, max_iter
+    return U, MaxIter, HistoricoRes
 
 
-def broyden(U0: np.ndarray, tol: float, max_iter: int) -> tuple[np.ndarray, int]:
+def Broyden(U0: np.ndarray, Tol: float, MaxIter: int) -> tuple[np.ndarray, int, list]:
+    # Metodo de Broyden. Calcula J so na primeira iteracao.
+    # Nas seguintes iteracoes do loop, a aproximacao da Jacobiana e atualizada usando a equacao secante com a diferenca do residuo.
+    # A velocidade da volta e maior por nao recalcular J inteira, embora precisa dar mais passos pra convergir.
     U = np.array(U0, dtype=float).copy()
-    N = _inferir_n(U)
+    N = InferirN(U)
+    HistoricoRes = []
 
-    F = calcular_F(U, N)
-    if norma_inf(F) < tol:
-        return U, 0
+    F = CalcularF(U, N)
+    ResNorma = NormaInfinito(F)
+    HistoricoRes.append(ResNorma)
+    if ResNorma < Tol:
+        return U, 0, HistoricoRes
 
-    J = calcular_jacobiana(U, N)
-    L, U_lu = fatoracao_lu(J)
+    J = CalcularJacobiana(U, N)
 
-    #  H = J^-1 usando J X = I
-    n = J.shape[0]
-    H = np.zeros((n, n))
-    I = np.eye(n)
-    print(
-        f"  [Broyden] Calculando inversa exata para N={N} ({n}x{n}). Isso pode demorar...")
-    for col in range(n):
-        H[:, col] = resolve_lu(L, U_lu, I[:, col])
+    for k in range(MaxIter):
+        if NormaInfinito(F) < Tol:
+            return U, k, HistoricoRes
 
-    for k in range(max_iter):
-        if norma_inf(F) < tol:
-            return U, k
+        L, ULU, Perm = FatoracaoLU(J)
+        DeltaU = ResolveLU(L, ULU, -F, Perm)
 
-        # dU = -H F
-        dU = -np.dot(H, F)
-        U_new = U + dU
-        F_new = calcular_F(U_new, N)
+        UNovo = U + DeltaU
+        FNovo = CalcularF(UNovo, N)
 
-        s = U_new - U
-        y = F_new - F
-        Hy = np.dot(H, y)
-        denom = float(np.dot(s, Hy))
-        if denom != 0.0:
-            H = H + np.outer((s - Hy), np.dot(s, H)) / denom
+        # Atualizacao do posto 1 da aproximacao da matriz baseada nas informacoes de secante 
+        s = UNovo - U
+        y = FNovo - F
+        Denom = float(np.dot(s, s))
+        if Denom != 0.0:
+            J = J + np.outer((y - np.dot(J, s)), s) / Denom
 
-        U = U_new
-        F = F_new
+        U = UNovo
+        F = FNovo
+        HistoricoRes.append(NormaInfinito(F))
 
-    return U, max_iter
+    return U, MaxIter, HistoricoRes
 
 
-def _solucao_exata(N: int) -> np.ndarray:
+def SolucaoExata(N: int) -> np.ndarray:
     h = 1.0 / (N + 1)
     T = np.zeros((N, N))
     for i in range(1, N + 1):
@@ -325,98 +353,201 @@ def _solucao_exata(N: int) -> np.ndarray:
     return T.reshape(N * N)
 
 
-def plotar_resultados(U_num: np.ndarray, U_exato: np.ndarray, N: int) -> None:
-    U_num = np.array(U_num, dtype=float).reshape((N, N))
-    U_exato = np.array(U_exato, dtype=float).reshape((N, N))
+def FloatParaExcel(Valor):
+    if Valor is None:
+        return "-"
+    return f"{Valor}".replace(".", ",")
 
-    # Padding com zeros para representar a fronteira T=0
-    T_num = np.zeros((N + 2, N + 2))
-    T_ex = np.zeros((N + 2, N + 2))
-    T_num[1: N + 1, 1: N + 1] = U_num
-    T_ex[1: N + 1, 1: N + 1] = U_exato
 
-    h = 1.0 / (N + 1)
+def SalvarCSV(Resultados: list, ErrosLU: list, Hs: list, Ns: list) -> None:
+    with open("resultados.csv", "w", newline="", encoding="utf-8-sig") as Arq:
+        Escritor = csv.writer(Arq, delimiter=";")
+        Escritor.writerow(["N", "Metodo", "Iteracoes", "Tempo(s)", "Erro Maximo"])
+        for N, Nome, It, Tempo, Erro in Resultados:
+            ItStr = str(It) if It is not None else "-"
+            TempoStr = FloatParaExcel(round(Tempo, 6)) if Tempo is not None else "-"
+            ErroStr = FloatParaExcel(Erro) if Erro is not None else "-"
+            Escritor.writerow([N, Nome, ItStr, TempoStr, ErroStr])
+
+        Escritor.writerow([])
+        Escritor.writerow(["Ordem de convergencia (Newton-LU)"])
+        Escritor.writerow(["De", "Para", "p"])
+        for i in range(len(ErrosLU) - 1):
+            if ErrosLU[i] is None or ErrosLU[i + 1] is None:
+                continue
+            p = np.log(ErrosLU[i] / ErrosLU[i + 1]) / np.log(Hs[i] / Hs[i + 1])
+            Escritor.writerow([
+                f"N={Ns[i]}",
+                f"N={Ns[i+1]}",
+                FloatParaExcel(round(p, 4))
+            ])
+
+
+def PlotarCorte1D(UNum: np.ndarray, UExato: np.ndarray, N: int) -> None:
+    UNum2D = np.array(UNum, dtype=float).reshape((N, N))
+    UExato2D = np.array(UExato, dtype=float).reshape((N, N))
+
+    TNum = np.zeros((N + 2, N + 2))
+    TEx = np.zeros((N + 2, N + 2))
+    TNum[1: N + 1, 1: N + 1] = UNum2D
+    TEx[1: N + 1, 1: N + 1] = UExato2D
+
+    x = np.linspace(0.0, 1.0, N + 2)
+    IndiceCorte = (N + 2) // 2
+
+    Fig, Ax = plt.subplots(1, 2, figsize=(14, 5))
+
+    Ax[0].plot(x, TNum[:, IndiceCorte], "b-o", markersize=4, linewidth=2, label="Numerica")
+    Ax[0].plot(x, TEx[:, IndiceCorte], "r--", linewidth=2, label="Exata")
+    Ax[0].set_title(f"Corte em y = 0.5 (N={N})", fontsize=14)
+    Ax[0].set_xlabel("x", fontsize=12)
+    Ax[0].set_ylabel("T(x, 0.5)", fontsize=12)
+    Ax[0].legend(fontsize=11)
+    Ax[0].grid(True, linestyle="--", alpha=0.5)
+
+    ErroCorte = np.abs(TNum[:, IndiceCorte] - TEx[:, IndiceCorte])
+    Ax[1].plot(x, ErroCorte, "k-s", markersize=4, linewidth=2)
+    Ax[1].set_title(f"Erro no corte y = 0.5 (N={N})", fontsize=14)
+    Ax[1].set_xlabel("x", fontsize=12)
+    Ax[1].set_ylabel("|T_num - T_exata|", fontsize=12)
+    Ax[1].grid(True, linestyle="--", alpha=0.5)
+
+    plt.tight_layout()
+    plt.savefig("Corte1D.png", dpi=150)
+    plt.show()
+
+
+def PlotarSuperficie3D(UNum: np.ndarray, UExato: np.ndarray, N: int) -> None:
+    UNum2D = np.array(UNum, dtype=float).reshape((N, N))
+    UExato2D = np.array(UExato, dtype=float).reshape((N, N))
+
+    TNum = np.zeros((N + 2, N + 2))
+    TEx = np.zeros((N + 2, N + 2))
+    TNum[1: N + 1, 1: N + 1] = UNum2D
+    TEx[1: N + 1, 1: N + 1] = UExato2D
+
     x = np.linspace(0.0, 1.0, N + 2)
     y = np.linspace(0.0, 1.0, N + 2)
     X, Y = np.meshgrid(x, y, indexing="ij")
 
-    erro = np.abs(T_num - T_ex)
+    Fig = plt.figure(figsize=(16, 6))
 
-    fig, ax = plt.subplots(1, 2, figsize=(12, 5))
+    Ax1 = Fig.add_subplot(1, 2, 1, projection="3d")
+    Ax1.plot_surface(X, Y, TNum, cmap="viridis", alpha=0.9, edgecolor="none")
+    Ax1.set_title(f"Solucao Numerica (N={N})", fontsize=13)
+    Ax1.set_xlabel("x")
+    Ax1.set_ylabel("y")
+    Ax1.set_zlabel("T(x, y)")
 
-    c0 = ax[0].contourf(X, Y, T_num, levels=20)
-    ax[0].set_title("Solucao Numerica")
-    ax[0].set_xlabel("x")
-    ax[0].set_ylabel("y")
-    fig.colorbar(c0, ax=ax[0])
-
-    c1 = ax[1].contourf(X, Y, erro, levels=20)
-    ax[1].set_title("Erro Absoluto")
-    ax[1].set_xlabel("x")
-    ax[1].set_ylabel("y")
-    fig.colorbar(c1, ax=ax[1])
+    Erro = np.abs(TNum - TEx)
+    Ax2 = Fig.add_subplot(1, 2, 2, projection="3d")
+    Ax2.plot_surface(X, Y, Erro, cmap="hot", alpha=0.9, edgecolor="none")
+    Ax2.set_title(f"Erro Pontual (N={N})", fontsize=13)
+    Ax2.set_xlabel("x")
+    Ax2.set_ylabel("y")
+    Ax2.set_zlabel("|T_num - T_exata|")
 
     plt.tight_layout()
+    plt.savefig("Superficie3D.png", dpi=150)
+    plt.show()
+
+
+def PlotarConvergencia(HistoricoMetodos: dict, N: int) -> None:
+    Fig, Ax = plt.subplots(figsize=(9, 6))
+
+    Cores = {"Newton-LU": "#2563eb", "Newton-BCG": "#16a34a", "Broyden": "#dc2626"}
+    Marcadores = {"Newton-LU": "o", "Newton-BCG": "s", "Broyden": "^"}
+
+    for Nome, Historico in HistoricoMetodos.items():
+        Iteracoes = list(range(len(Historico)))
+        Ax.semilogy(
+            Iteracoes, Historico,
+            marker=Marcadores.get(Nome, "o"),
+            color=Cores.get(Nome, "#000000"),
+            linewidth=2, markersize=6,
+            label=Nome
+        )
+
+    Ax.axhline(y=1e-6, color="gray", linestyle=":", linewidth=1.5, label="Tolerancia (1e-6)")
+    Ax.set_title(f"Norma do Residuo por Iteracao (N={N})", fontsize=14)
+    Ax.set_xlabel("Iteracao", fontsize=12)
+    Ax.set_ylabel("||F(U)||_inf", fontsize=12)
+    Ax.legend(fontsize=11)
+    Ax.grid(True, which="both", linestyle="--", alpha=0.5)
+    plt.tight_layout()
+    plt.savefig("ConvergenciaResiduos.png", dpi=150)
     plt.show()
 
 
 if __name__ == "__main__":
     Ns = [4, 8, 16, 32]
-    tol = 1e-6
-    max_iter = 100
+    Tol = 1e-6
+    MaxIter = 100
 
-    resultados = []
-    erros_lu = []
-    hs = []
+    Resultados = []
+    ErrosLU = []
+    Hs = []
 
-    U_plot = None
-    U_exata_plot = None
-    N_plot = None
+    NPlot = 16
+    UPlotLU = None
+    UExataPlot = None
+    HistoricoPlot = {}
 
     for N in Ns:
         h = 1.0 / (N + 1)
-        hs.append(h)
+        Hs.append(h)
 
         U0 = np.zeros(N * N)
-        U_exata = _solucao_exata(N)
+        UExata = SolucaoExata(N)
 
-        for nome, metodo in (
-            ("Newton-LU", newton_lu),
-            ("Newton-CG", newton_cg),
-            ("Broyden", broyden),
+        for Nome, Metodo in (
+            ("Newton-LU", NewtonLU),
+            ("Newton-BCG", NewtonBCG),
+            ("Broyden", Broyden),
         ):
             try:
-                t0 = time.time()
-                U_final, it = metodo(U0, tol, max_iter)
-                t1 = time.time()
+                T0 = time.time()
+                UFinal, It, Historico = Metodo(U0, Tol, MaxIter)
+                T1 = time.time()
 
-                erro = norma_inf(U_final - U_exata)
-                resultados.append((N, nome, it, t1 - t0, erro))
-                if nome == "Newton-LU":
-                    erros_lu.append(erro)
-                    if N_plot is None or N >= N_plot:
-                        U_plot = U_final
-                        U_exata_plot = U_exata
-                        N_plot = N
-            except Exception as exc:
-                resultados.append((N, nome, None, None, None))
-                print(f"Aviso: {nome} falhou em N={N}: {exc}")
+                Erro = NormaInfinito(UFinal - UExata)
+                Resultados.append((N, Nome, It, T1 - T0, Erro))
+
+                if Nome == "Newton-LU":
+                    ErrosLU.append(Erro)
+
+                if N == NPlot:
+                    HistoricoPlot[Nome] = Historico
+                    if Nome == "Newton-LU":
+                        UPlotLU = UFinal
+                        UExataPlot = UExata
+
+            except Exception as Exc:
+                Resultados.append((N, Nome, None, None, None))
+                print(f"Aviso: {Nome} falhou em N={N}: {Exc}")
 
     print("Resultados (N, Metodo, Iteracoes, Tempo(s), Erro Maximo)")
     print("-" * 68)
-    for N, nome, it, tempo, erro in resultados:
-        it_str = f"{it}" if it is not None else "-"
-        tempo_str = f"{tempo:.6f}" if tempo is not None else "-"
-        erro_str = f"{erro:.6e}" if erro is not None else "-"
-        print(f"{N:>4}  {nome:<10}  {it_str:>6}  {tempo_str:>10}  {erro_str:>12}")
+    for N, Nome, It, Tempo, Erro in Resultados:
+        ItStr = f"{It}" if It is not None else "-"
+        TempoStr = f"{Tempo:.6f}" if Tempo is not None else "-"
+        ErroStr = f"{Erro:.6e}" if Erro is not None else "-"
+        print(f"{N:>4}  {Nome:<10}  {ItStr:>6}  {TempoStr:>10}  {ErroStr:>12}")
 
     print("\nOrdem de convergencia (Newton-LU)")
     print("-" * 40)
-    for i in range(len(erros_lu) - 1):
-        if erros_lu[i] is None or erros_lu[i + 1] is None:
+    for i in range(len(ErrosLU) - 1):
+        if ErrosLU[i] is None or ErrosLU[i + 1] is None:
             continue
-        p = np.log(erros_lu[i] / erros_lu[i + 1]) / np.log(hs[i] / hs[i + 1])
+        p = np.log(ErrosLU[i] / ErrosLU[i + 1]) / np.log(Hs[i] / Hs[i + 1])
         print(f"N={Ns[i]} -> N={Ns[i+1]}: p = {p:.4f}")
 
-    if U_plot is not None and U_exata_plot is not None and N_plot is not None:
-        plotar_resultados(U_plot, U_exata_plot, N_plot)
+    SalvarCSV(Resultados, ErrosLU, Hs, Ns)
+    print("\nCSV salvo em: resultados.csv")
+
+    if UPlotLU is not None and UExataPlot is not None:
+        PlotarCorte1D(UPlotLU, UExataPlot, NPlot)
+        PlotarSuperficie3D(UPlotLU, UExataPlot, NPlot)
+
+    if HistoricoPlot:
+        PlotarConvergencia(HistoricoPlot, NPlot)
